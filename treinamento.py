@@ -79,7 +79,7 @@ def process_split(split_name, items):
 
         # copiar imagem para pasta
         dest_img = os.path.join(YOLO_DATA_DIR, "images", split_name, fn)
-        shutil.copy(img_path, dest_img)
+        cv2.imwrite(dest_img, img)
 
         # escrever label
         label_fn = fn.rsplit(".", 1)[0] + ".txt"
@@ -88,8 +88,8 @@ def process_split(split_name, items):
             f.write(f"{cls_idx} {x_c:.6f} {y_c:.6f} {nw:.6f} {nh:.6f}\n")
 
 
-for split_name, items in splits.items():
-    process_split(split_name, items)
+# for split_name, items in splits.items():
+#     process_split(split_name, items)
 
 # gera data.yaml
 cfg = {
@@ -101,17 +101,19 @@ cfg = {
 with open(f"{YOLO_DATA_DIR}/data.yaml", "w") as f:
     yaml.dump(cfg, f)
 
-print("Annotations geradas. Iniciando treino...")
 
 # --- chamada ao treinamento via API do Ultralytics (sem subprocess) ---
-from ultralytics import YOLO
+if __name__ == "__main__":
+    from ultralytics import YOLO
 
-model = YOLO("yolov5s.pt")  # backbone pré-treinado
-results = model.train(
-    data=f"{YOLO_DATA_DIR}/data.yaml",
-    epochs=30,
-    imgsz=416,
-    batch=16,
-    name="gestos_modelo",
-)
-print("Treino finalizado. Checkpoints em:", results.path)
+    print("Annotations geradas. Iniciando treino...")
+
+    model = YOLO("weights/yolov5s.pt")  # backbone pré-treinado
+    results = model.train(
+        data=f"{YOLO_DATA_DIR}/data.yaml",
+        epochs=5,
+        imgsz=416,
+        batch=16,
+        name="gestos_modelo",
+    )
+    print("Treino finalizado. Checkpoints em:", model.trainer.save_dir)
