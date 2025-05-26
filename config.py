@@ -1,5 +1,3 @@
-# config.py
-
 # Caminho para o modelo YOLO treinado (pode ser .pt)
 YOLO_MODEL_PATH = "yolov5/runs/train/gestos_modelo/weights/best.pt"
 

@@ -1,19 +1,13 @@
-# detector.py
-
 import cv2
-import torch
+from ultralytics import YOLO
 
-from config import CLASSES, CONFIDENCE_THRESHOLD, WINDOW_NAME, YOLO_MODEL_PATH
+from config import CONFIDENCE_THRESHOLD, WINDOW_NAME, YOLO_MODEL_PATH
 
-# Carregar modelo YOLO treinado
-model = torch.hub.load(
-    "ultralytics/yolov5", "custom", path=YOLO_MODEL_PATH, force_reload=True
-)
-model.conf = CONFIDENCE_THRESHOLD  # Threshold de confiança
+# Carrega o modelo treinado
+model = YOLO(YOLO_MODEL_PATH)
 
-# Acessar webcam (0 é geralmente a câmera padrão)
+# Acessa a webcam
 cap = cv2.VideoCapture(0)
-
 if not cap.isOpened():
     print("Erro ao acessar a webcam.")
     exit()
@@ -25,17 +19,15 @@ while True:
     if not ret:
         break
 
-    # Inferência com YOLO
-    results = model(frame)
+    # Inferência
+    results = model.predict(source=frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
 
-    # Renderizar as detecções no próprio frame
-    rendered = results.render()[0]  # Renderiza bounding boxes, classes e scores
+    # Renderiza as detecções no próprio frame
+    rendered = results[0].plot()
     cv2.imshow(WINDOW_NAME, rendered)
 
-    # Pressione 'q' para sair
     if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
-# Finalizar
 cap.release()
 cv2.destroyAllWindows()

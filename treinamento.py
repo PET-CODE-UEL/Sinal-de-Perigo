@@ -1,5 +1,3 @@
-# treinamento.py
-
 import glob
 import os
 import random
@@ -7,102 +5,113 @@ import shutil
 import sys
 
 import cv2
-import yaml  # para gerar o arquivo data.yaml
+import yaml
 from tqdm import tqdm
 
-# Caminho original do dataset (ex: Gesture Image Data)
-ORIGINAL_DATASET = (
-    r"C:\Users\Usuario\Desktop\Faculdade\Sinal de Perigo\Gesture Image Data"
-)
+# --- CONFIGURAÇÕES ---
+ORIG_IMG_DIR = r"C:\Users\Usuario\Desktop\Faculdade\Sinal de Perigo\Gesture Image Data"
+ORIG_MASK_DIR = r"C:\Users\Usuario\Desktop\Faculdade\Sinal de Perigo\Gesture Image Pre-Processed Data"
 
-# Novo caminho para formato YOLO
-YOLO_DATASET_DIR = "dataset_gestos"
-TRAIN_SPLIT = 0.8  # 80% treino, 20% validação
+YOLO_DATA_DIR = "dataset_gestos"
+SPLIT = 0.8  # 80% train, 20% val
+IMG_SIZE = (416, 416)  # opcional: redimensionar
 
-# Cria estrutura de pastas
-for split in ["train", "val"]:
-    os.makedirs(f"{YOLO_DATASET_DIR}/images/{split}", exist_ok=True)
-    os.makedirs(f"{YOLO_DATASET_DIR}/labels/{split}", exist_ok=True)
+# Cria pastas
+for sub in ("images/train", "images/val", "labels/train", "labels/val"):
+    os.makedirs(f"{YOLO_DATA_DIR}/{sub}", exist_ok=True)
 
-# Mapear classes
-classes = sorted(os.listdir(ORIGINAL_DATASET))
-class_to_index = {name: idx for idx, name in enumerate(classes)}
+# Mapeia classes
+classes = sorted(os.listdir(ORIG_IMG_DIR))
+cls2idx = {c: i for i, c in enumerate(classes)}
 
-# Converter imagens
-all_data = []
-
-for class_name in classes:
-    class_dir = os.path.join(ORIGINAL_DATASET, class_name)
-    if not os.path.isdir(class_dir):
-        continue
-    for img_path in glob.glob(f"{class_dir}/*.*"):
-        all_data.append((img_path, class_to_index[class_name]))
-
-# Embaralhar e dividir
-random.shuffle(all_data)
-split_idx = int(TRAIN_SPLIT * len(all_data))
-train_data = all_data[:split_idx]
-val_data = all_data[split_idx:]
-
-
-def convert_and_copy(data_list, split):
-    for img_path, class_idx in tqdm(data_list, desc=f"Processando {split}"):
+# Coleta todos os pares (imagem, máscara)
+data = []
+for cls in classes:
+    img_folder = os.path.join(ORIG_IMG_DIR, cls)
+    mask_folder = os.path.join(ORIG_MASK_DIR, cls)
+    for img_path in glob.glob(f"{img_folder}/*.jpg"):
         filename = os.path.basename(img_path)
+        mask_path = os.path.join(mask_folder, filename)
+        if os.path.isfile(mask_path):
+            data.append((img_path, mask_path, cls2idx[cls]))
+        else:
+            print(f"Aviso: sem máscara para {img_path}")
+
+random.shuffle(data)
+split_idx = int(len(data) * SPLIT)
+splits = {
+    "train": data[:split_idx],
+    "val": data[split_idx:],
+}
+
+
+def process_split(split_name, items):
+    for img_path, mask_path, cls_idx in tqdm(items, desc=f"Processando {split_name}"):
+        fn = os.path.basename(img_path)
+        # Carrega imagem e máscara
         img = cv2.imread(img_path)
-        h, w = img.shape[:2]
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        h, w = mask.shape
 
-        # Copia a imagem
-        dest_img_path = os.path.join(YOLO_DATASET_DIR, "images", split, filename)
-        shutil.copyfile(img_path, dest_img_path)
+        # Encontrar contornos na máscara
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue  # sem mão detectada
+        # caixa mínima que engloba tudo
+        x, y, bw, bh = cv2.boundingRect(cv2.vconcat(contours))
 
-        # Gera label com bounding box centralizada (assumido!)
-        x_center, y_center = 0.5, 0.5
-        box_width, box_height = 0.8, 0.8  # valores padrão, ajustável
+        # opcional: redimensionar imagem para IMG_SIZE e converter bbox
+        if IMG_SIZE:
+            img = cv2.resize(img, IMG_SIZE)
+            scale_x = IMG_SIZE[0] / w
+            scale_y = IMG_SIZE[1] / h
+            x *= scale_x
+            bw *= scale_x
+            y *= scale_y
+            bh *= scale_y
+            w, h = IMG_SIZE
 
-        label_path = os.path.join(
-            YOLO_DATASET_DIR, "labels", split, filename.rsplit(".", 1)[0] + ".txt"
-        )
-        with open(label_path, "w") as f:
-            f.write(f"{class_idx} {x_center} {y_center} {box_width} {box_height}\n")
+        # normalizar para YOLO: x_center, y_center, w, h
+        x_c = (x + bw / 2) / w
+        y_c = (y + bh / 2) / h
+        nw = bw / w
+        nh = bh / h
+
+        # copiar imagem para pasta
+        dest_img = os.path.join(YOLO_DATA_DIR, "images", split_name, fn)
+        shutil.copy(img_path, dest_img)
+
+        # escrever label
+        label_fn = fn.rsplit(".", 1)[0] + ".txt"
+        dest_lbl = os.path.join(YOLO_DATA_DIR, "labels", split_name, label_fn)
+        with open(dest_lbl, "w") as f:
+            f.write(f"{cls_idx} {x_c:.6f} {y_c:.6f} {nw:.6f} {nh:.6f}\n")
 
 
-convert_and_copy(train_data, "train")
-convert_and_copy(val_data, "val")
+for split_name, items in splits.items():
+    process_split(split_name, items)
 
-# Criar data.yaml
-data_yaml = {
-    "train": os.path.abspath(YOLO_DATASET_DIR + "/images/train"),
-    "val": os.path.abspath(YOLO_DATASET_DIR + "/images/val"),
+# gera data.yaml
+cfg = {
+    "train": os.path.abspath(f"{YOLO_DATA_DIR}/images/train"),
+    "val": os.path.abspath(f"{YOLO_DATA_DIR}/images/val"),
     "nc": len(classes),
     "names": classes,
 }
+with open(f"{YOLO_DATA_DIR}/data.yaml", "w") as f:
+    yaml.dump(cfg, f)
 
-with open(os.path.join(YOLO_DATASET_DIR, "data.yaml"), "w") as f:
-    yaml.dump(data_yaml, f)
+print("Annotations geradas. Iniciando treino...")
 
-print("Pré-processamento finalizado. Iniciando treinamento...")
+# --- chamada ao treinamento via API do Ultralytics (sem subprocess) ---
+from ultralytics import YOLO
 
-# --- Treinamento com YOLOv5 ---
-
-import subprocess
-
-# Caminho para o script de treino (requer yolov5 clonado)
-yolov5_dir = "yolov5"  # clone do repositório
-subprocess.run(
-    [
-        sys.executable,
-        f"{yolov5_dir}/train.py",
-        "--img",
-        "416",
-        "--batch",
-        "16",
-        "--epochs",
-        "30",
-        "--data",
-        f"{YOLO_DATASET_DIR}/data.yaml",
-        "--weights",
-        "yolov5s.pt",
-        "--name",
-        "gestos_modelo",
-    ]
+model = YOLO("yolov5s.pt")  # backbone pré-treinado
+results = model.train(
+    data=f"{YOLO_DATA_DIR}/data.yaml",
+    epochs=30,
+    imgsz=416,
+    batch=16,
+    name="gestos_modelo",
 )
+print("Treino finalizado. Checkpoints em:", results.path)
